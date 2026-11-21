@@ -327,7 +327,7 @@
 
     // ---- Members ----
     addMember(name) {
-      const m = { id: uid("m"), name: name.trim() };
+      const m = { id: uid("m"), name: name.trim(), updatedAt: Date.now() };
       this.state.members.push(m);
       this.save();
       return m;
@@ -336,6 +336,7 @@
       const m = this.state.members.find((x) => x.id === id);
       if (m) {
         m.name = name.trim();
+        m.updatedAt = Date.now();
         this.save();
       }
     },
@@ -367,6 +368,7 @@
         participants: payload.participants || [],
         date: payload.date || todayStr(),
         datetime,
+        updatedAt: Date.now(),
       };
       this.state.transactions.push(tx);
       if (tx.type === "Chi" && tx.subType === "tui") {
@@ -390,6 +392,7 @@
         date: payload.date || tx.date,
       });
       tx.datetime = tx.date + "T" + (tx.datetime.split("T")[1] || nowTime());
+      tx.updatedAt = Date.now();
 
       if (tx.type === "Chi" && tx.subType === "tui") {
         this.createOrUpdateAutoSync(tx);
@@ -416,6 +419,7 @@
         auto.date = tx.date;
         auto.datetime = tx.datetime;
         auto.memberId = tx.memberId;
+        auto.updatedAt = Date.now();
       } else {
         auto = {
           id: uid("auto_tx"),
@@ -429,6 +433,7 @@
           date: tx.date,
           datetime: tx.datetime,
           linkedId: tx.id,
+          updatedAt: Date.now(),
         };
         this.state.transactions.push(auto);
       }
@@ -504,6 +509,7 @@
         dinner: false,
       };
       cur[slot] = !cur[slot];
+      cur.updatedAt = Date.now();
       this.state.meals[key] = cur;
       this.save();
       return cur[slot];
@@ -701,6 +707,7 @@
       });
       return months;
     },
+
   };
 
   function nowTime() {
@@ -1389,11 +1396,13 @@
   }
 
   function wireMealsEvents() {
-    document.getElementById("mealPrev").onclick = () => {
+    const mealPrev = document.getElementById("mealPrev");
+    if (mealPrev) mealPrev.onclick = () => {
       UI.mealDate = shiftDate(UI.mealDate, -1);
       render();
     };
-    document.getElementById("mealNext").onclick = () => {
+    const mealNext = document.getElementById("mealNext");
+    if (mealNext) mealNext.onclick = () => {
       UI.mealDate = shiftDate(UI.mealDate, 1);
       render();
     };
@@ -1475,11 +1484,61 @@
     const meals = DB.mealCountInRange(start, end);
     const maxMeal = Math.max(1, ...Object.values(meals).map((x) => x.total));
 
+    // Bảng tổng hợp mọi thành viên (đã góp / tiền ăn / chi khác / còn lại) trong tháng đang xem
+    const ledger = DB.memberLedger(start, end);
+
     return `
       <div class="card-row" style="margin-bottom:14px">
         <button class="btn" id="repPrevMonth">‹ Tháng trước</button>
         <div style="font-weight:700">${fmtMonthLabel(start)}</div>
         <button class="btn" id="repNextMonth">Tháng sau ›</button>
+      </div>
+
+      <div class="section-title-row">
+        <span class="section-title" style="margin-bottom:0">Bảng tổng hợp mọi thành viên</span>
+        ${DB.state.members.length ? `<button class="btn btn-sm" id="btnExportReport">📄 Xuất báo cáo</button>` : ""}
+      </div>
+      <div class="card member-summary-card">
+        ${
+          DB.state.members.length
+            ? `<div class="table-scroll">
+          <table class="member-summary-table">
+            <thead>
+              <tr>
+                <th>Thành viên</th>
+                <th>Đã góp</th>
+                <th>Tiền ăn</th>
+                <th>Chi khác</th>
+                <th>Còn lại</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${DB.state.members
+                .map((m) => {
+                  const row = ledger.perMember[m.id] || {
+                    contributed: 0,
+                    tienAn: 0,
+                    chiKhac: 0,
+                    remaining: 0,
+                  };
+                  const posNeg = row.remaining < 0 ? "neg" : "pos";
+                  return `<tr>
+                    <td class="msum-name">${esc(m.name)}</td>
+                    <td>${fmtVND(row.contributed)}</td>
+                    <td>${fmtVND(row.tienAn)}</td>
+                    <td>${fmtVND(row.chiKhac)}</td>
+                    <td class="msum-remaining ${posNeg}">${fmtVNDSigned(
+                    row.remaining
+                  )}</td>
+                  </tr>`;
+                })
+                .join("")}
+            </tbody>
+          </table>
+        </div>`
+            : emptyState("Chưa có thành viên")
+        }
+        <div class="hint" style="margin-top:8px">Còn lại = Đã góp − (Tiền ăn + Chi khác). Số dương là còn dư, số âm là đang nợ quỹ.</div>
       </div>
 
       <div class="section-title">Tổng hợp chi tiêu theo danh mục</div>
@@ -1641,6 +1700,219 @@
       UI.reportMonth = shiftMonth(UI.reportMonth, 1);
       render();
     };
+    const btnExp = document.getElementById("btnExportReport");
+    if (btnExp) btnExp.onclick = () => openExportReportModal();
+  }
+
+  /* ================= XUẤT BÁO CÁO CHI TIẾT THÀNH VIÊN ================= */
+  function openExportReportModal() {
+    const members = DB.state.members;
+    if (!members.length) { toast("Chưa có thành viên"); return; }
+
+    // Tạo danh sách tháng có giao dịch (12 tháng gần nhất + tháng hiện tại)
+    const monthSet = new Set();
+    DB.state.transactions.forEach((t) => { if (t.date) monthSet.add(t.date.slice(0, 7)); });
+    const today = todayStr().slice(0, 7);
+    for (let i = 0; i < 12; i++) monthSet.add(shiftMonth(today, -i));
+    const months = Array.from(monthSet).sort().reverse().slice(0, 24);
+
+    openModal("📄 Xuất báo cáo thành viên",
+      `<div class="form-group">
+        <label class="form-label">Thành viên</label>
+        <select class="form-select" id="rptMember">
+          <option value="ALL">— Tất cả thành viên —</option>
+          ${members.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Từ tháng</label>
+        <select class="form-select" id="rptFrom">
+          ${months.map((mo) => `<option value="${mo}"${mo === UI.reportMonth ? " selected" : ""}>${fmtMonthLabel(mo + "-01")}</option>`).join("")}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Đến tháng</label>
+        <select class="form-select" id="rptTo">
+          ${months.map((mo) => `<option value="${mo}"${mo === UI.reportMonth ? " selected" : ""}>${fmtMonthLabel(mo + "-01")}</option>`).join("")}
+        </select>
+      </div>
+      <div class="form-group" style="margin-top:4px">
+        <button class="btn primary block" id="btnGenReport">📥 Tạo & tải báo cáo (HTML)</button>
+      </div>`,
+      {
+        onMount: () => {
+          document.getElementById("btnGenReport").onclick = () => {
+            const memberId = document.getElementById("rptMember").value;
+            const fromMo  = document.getElementById("rptFrom").value;
+            const toMo    = document.getElementById("rptTo").value;
+            if (fromMo > toMo) { toast("Tháng bắt đầu phải ≤ tháng kết thúc"); return; }
+            generateAndDownloadReport(memberId === "ALL" ? null : memberId, fromMo, toMo);
+            closeModal();
+          };
+        },
+      }
+    );
+  }
+
+  function generateAndDownloadReport(memberId, fromMo, toMo) {
+    // Xác định danh sách thành viên cần xuất
+    const targetMembers = memberId
+      ? DB.state.members.filter((m) => m.id === memberId)
+      : DB.state.members;
+    if (!targetMembers.length) { toast("Không tìm thấy thành viên"); return; }
+
+    const start = fromMo + "-01";
+    // Ngày cuối của toMo
+    const [toY, toM] = toMo.split("-").map(Number);
+    const end = new Date(toY, toM, 0).toISOString().slice(0, 10); // ngày cuối tháng
+
+    const { start: _s, end: _e } = { start, end };
+
+    // Tính ledger toàn bộ khoảng thời gian
+    const ledger = DB.memberLedger(start, end);
+
+    // Lấy giao dịch trong khoảng
+    const txAll = DB.state.transactions.filter((t) => t.date >= start && t.date <= end);
+
+    // Lấy bữa ăn trong khoảng
+    const mealsByMember = {};
+    targetMembers.forEach((m) => { mealsByMember[m.id] = []; });
+    Object.keys(DB.state.meals).forEach((key) => {
+      const idx = key.lastIndexOf("_");
+      const date = key.slice(0, idx).slice(0, 10);
+      const mid  = key.slice(idx + 1);
+      if (date < start || date > end) return;
+      if (!mealsByMember[mid]) return;
+      const ms = DB.state.meals[key];
+      const slots = ["breakfast","lunch","dinner"].filter((s) => ms[s]);
+      if (slots.length) mealsByMember[mid].push({ date, slots });
+    });
+
+    // ---- Tạo nội dung HTML báo cáo ----
+    const now = new Date().toLocaleString("vi-VN");
+    const rangeLabel = fromMo === toMo
+      ? fmtMonthLabel(fromMo + "-01")
+      : fmtMonthLabel(fromMo + "-01") + " – " + fmtMonthLabel(toMo + "-01");
+
+    const memberBlocks = targetMembers.map((m) => {
+      const row = ledger.perMember[m.id] || { contributed: 0, tienAn: 0, chiKhac: 0, remaining: 0, meals: 0 };
+
+      // Giao dịch liên quan thành viên: Thu của người đó + Chi quỹ có participants chứa người đó + Chi túi của người đó
+      const myTx = txAll.filter((t) => {
+        if (t.linkedId) return false; // bỏ bản ghi tự động
+        if (t.type === "Thu" && t.memberId === m.id) return true;
+        if (t.type === "Chi" && t.subType === "tui" && t.memberId === m.id) return true;
+        if (t.type === "Chi" && t.subType === "quy") {
+          const parts = t.participants && t.participants.length ? t.participants : DB.state.members.map((x) => x.id);
+          return parts.includes(m.id);
+        }
+        return false;
+      }).sort((a, b) => a.datetime > b.datetime ? 1 : -1);
+
+      const txRows = myTx.map((t) => {
+        const isIncome = t.type === "Thu";
+        const catLabel = t.category === "AnUong" ? "Ăn uống" : (t.category || "Khác");
+        const subLabel = t.subType === "quy" ? "Quỹ chung" : "Chi túi";
+        let amtLabel = isIncome
+          ? `+${fmtVND(t.amount)}`
+          : (t.type === "Chi" && t.subType === "quy")
+            ? (() => {
+                const parts = t.participants && t.participants.length ? t.participants : DB.state.members.map((x) => x.id);
+                const valid = parts.filter((id) => DB.state.members.find((x) => x.id === id));
+                const share = valid.length ? t.amount / valid.length : 0;
+                return `-${fmtVND(share)} (phần ${valid.length} người)`;
+              })()
+            : `-${fmtVND(t.amount)}`;
+        const style = isIncome ? "color:#1a9e4e;font-weight:600" : "color:#e8402a";
+        return `<tr>
+          <td style="white-space:nowrap">${t.date}</td>
+          <td>${esc(t.description || catLabel)}</td>
+          <td>${isIncome ? "Thu" : "Chi – " + subLabel}</td>
+          <td style="text-align:right;${style}">${amtLabel}</td>
+        </tr>`;
+      }).join("");
+
+      const mealRows = (mealsByMember[m.id] || [])
+        .sort((a, b) => a.date > b.date ? 1 : -1)
+        .map((r) => {
+          const slotNames = { breakfast: "Sáng", lunch: "Trưa", dinner: "Tối" };
+          return `<tr><td>${r.date}</td><td>${r.slots.map((s) => slotNames[s]).join(", ")}</td></tr>`;
+        }).join("");
+
+      const posNeg = row.remaining < 0
+        ? `<span style="color:#e8402a;font-weight:700">${fmtVNDSigned(row.remaining)}</span>`
+        : `<span style="color:#1a9e4e;font-weight:700">${fmtVNDSigned(row.remaining)}</span>`;
+
+      return `
+        <div class="member-block">
+          <h2 style="margin:0 0 12px;color:#034694;border-bottom:2px solid #034694;padding-bottom:6px">${esc(m.name)}</h2>
+          <table class="summary-tbl">
+            <tr><td>Đã góp (nộp quỹ + tự ứng)</td><td class="num">${fmtVND(row.contributed)}</td></tr>
+            <tr><td>Tiền ăn phân bổ</td><td class="num" style="color:#e8402a">-${fmtVND(row.tienAn)}</td></tr>
+            <tr><td>Chi phí khác phân bổ</td><td class="num" style="color:#e8402a">-${fmtVND(row.chiKhac)}</td></tr>
+            <tr class="total-row"><td><strong>Còn lại</strong></td><td class="num">${posNeg}</td></tr>
+            <tr><td>Số bữa ăn đã tham gia</td><td class="num">${row.meals} bữa</td></tr>
+          </table>
+
+          <h3 style="margin:16px 0 8px;color:#5b6b85;font-size:14px">GIAO DỊCH LIÊN QUAN</h3>
+          ${myTx.length ? `<table class="detail-tbl">
+            <thead><tr><th>Ngày</th><th>Nội dung</th><th>Loại</th><th style="text-align:right">Số tiền</th></tr></thead>
+            <tbody>${txRows}</tbody>
+          </table>` : `<p style="color:#888;font-size:13px">Không có giao dịch nào trong kỳ.</p>`}
+
+          <h3 style="margin:16px 0 8px;color:#5b6b85;font-size:14px">BỮA ĂN THAM GIA</h3>
+          ${mealRows ? `<table class="detail-tbl">
+            <thead><tr><th>Ngày</th><th>Bữa</th></tr></thead>
+            <tbody>${mealRows}</tbody>
+          </table>` : `<p style="color:#888;font-size:13px">Không có dữ liệu bữa ăn trong kỳ.</p>`}
+        </div>`;
+    }).join("<hr style='margin:28px 0;border:none;border-top:1px solid #dce3f0'>");
+
+    const html = `<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Báo cáo SmartFund – ${esc(rangeLabel)}</title>
+<style>
+  body{font-family:'Segoe UI',Arial,sans-serif;margin:0;padding:20px 24px;color:#0b1a33;background:#f4f7fc;font-size:14px}
+  h1{color:#034694;font-size:20px;margin:0 0 4px}
+  .meta{color:#5b6b85;font-size:12px;margin-bottom:28px}
+  .member-block{background:#fff;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 6px rgba(0,0,0,.08)}
+  .summary-tbl{width:100%;border-collapse:collapse;margin-bottom:4px}
+  .summary-tbl td{padding:5px 4px;border-bottom:1px solid #eef2f9}
+  .summary-tbl .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .summary-tbl .total-row td{border-top:2px solid #034694;padding-top:7px;font-size:15px}
+  .detail-tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .detail-tbl th{background:#034694;color:#fff;padding:6px 8px;text-align:left;font-weight:600}
+  .detail-tbl td{padding:5px 8px;border-bottom:1px solid #eef2f9}
+  .detail-tbl tr:nth-child(even) td{background:#f9fbff}
+  h3{text-transform:uppercase;letter-spacing:.04em}
+  @media print{body{background:#fff;padding:0} .member-block{box-shadow:none;border:1px solid #ddd;page-break-inside:avoid}}
+</style>
+</head>
+<body>
+  <h1>📊 Báo cáo SmartFund</h1>
+  <div class="meta">Kỳ: ${esc(rangeLabel)} &nbsp;|&nbsp; Xuất lúc: ${now}</div>
+  ${memberBlocks}
+  <div style="margin-top:24px;font-size:11px;color:#aaa;text-align:center">SmartFund – Quỹ chung nhóm</div>
+</body>
+</html>`;
+
+    // Tải file
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    const fname = memberId
+      ? `BaoCao_${(targetMembers[0]?.name || "tv").replace(/\s+/g,"_")}_${fromMo}_${toMo}.html`
+      : `BaoCao_TatCa_${fromMo}_${toMo}.html`;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast("✅ Đã tải báo cáo");
   }
 
   /* ================= SETTINGS / BACKUP ================= */

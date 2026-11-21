@@ -169,6 +169,19 @@ h1,h2,h3{margin:0 0 10px;}
   margin:20px 2px 9px;
 }
 .section-title:first-child{margin-top:2px;}
+.section-title-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin:20px 2px 9px;
+}
+.section-title-row .section-title{margin:0;}
+.btn-sm{
+  font-size:12px;
+  padding:5px 11px;
+  border-radius:8px;
+  font-weight:600;
+}
 
 .card{
   background:var(--card);
@@ -386,6 +399,8 @@ h1,h2,h3{margin:0 0 10px;}
   font-family:inherit;
 }
 .form-input:focus,.form-select:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-dim);}
+.settings-divider{height:1px;background:var(--border);margin:18px 0 14px;}
+.settings-section-title{font-size:14px;font-weight:800;color:var(--text);margin-bottom:10px;}
 .chip-group{display:flex;flex-wrap:wrap;gap:8px;}
 .chip{
   padding:8px 14px;
@@ -542,3 +557,31 @@ h1,h2,h3{margin:0 0 10px;}
 .cat-detail-total{font-weight:800;font-size:14.5px;}
 .cat-detail-meta{font-size:12px;color:var(--text-dim);margin-bottom:6px;}
 .cat-detail-meta b{color:var(--text);font-weight:700;}
+
+/* bảng tổng hợp mọi thành viên */
+.member-summary-card{padding:14px 0 14px 14px;}
+.table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-right:14px;}
+.member-summary-table{width:100%;border-collapse:collapse;min-width:480px;font-size:13px;}
+.member-summary-table thead th{
+  text-align:right;
+  font-size:11.5px;
+  font-weight:800;
+  color:var(--text-dim);
+  text-transform:none;
+  padding:0 8px 8px;
+  border-bottom:2px solid var(--border);
+  white-space:nowrap;
+}
+.member-summary-table thead th:first-child{text-align:left;}
+.member-summary-table td{
+  padding:9px 8px;
+  text-align:right;
+  border-bottom:1px solid var(--border);
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+.member-summary-table tr:last-child td{border-bottom:none;}
+.member-summary-table td.msum-name{text-align:left;font-weight:700;color:var(--text);}
+.member-summary-table td.msum-remaining{font-weight:800;}
+.member-summary-table td.msum-remaining.pos{color:var(--green);}
+.member-summary-table td.msum-remaining.neg{color:var(--red);}
