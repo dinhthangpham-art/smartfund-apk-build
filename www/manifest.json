@@ -1,7 +1,7 @@
 {
-  "name": "SmartFund - Quỹ chung",
-  "short_name": "SmartFund",
-  "description": "Quản lý quỹ chung, chi tiêu và bữa ăn cho nhóm",
+  "name": "Sổ Ăn Thắng",
+  "short_name": "Sổ Ăn Thắng",
+  "description": "Quản lý quỹ ăn uống và chi tiêu nhóm",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

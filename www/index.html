@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
-<title>SmartFund - Quỹ chung</title>
+<title>Sổ Ăn Thắng</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -15,7 +15,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="SmartFund">
+<meta name="apple-mobile-web-app-title" content="Sổ Ăn Thắng">
 
 <style>
 :root{
@@ -613,7 +613,7 @@ h1,h2,h3{margin:0 0 10px;}
   <header class="topbar">
     <div class="topbar-title">
       <span class="logo">💰</span>
-      <span>SmartFund</span>
+      <span>Sổ Ăn Thắng</span>
     </div>
     <button id="btnSettings" class="icon-btn" title="Cài đặt / Sao lưu">⚙️</button>
   </header>
@@ -634,6 +634,7 @@ h1,h2,h3{margin:0 0 10px;}
 
 <input type="file" id="fileImport" accept="application/json" style="display:none">
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 /* ======================================================================
    SmartFund – quản lý quỹ chung & bữa ăn
@@ -2373,9 +2374,8 @@ h1,h2,h3{margin:0 0 10px;}
           ${months.map((mo) => `<option value="${mo}"${mo === UI.reportMonth ? " selected" : ""}>${fmtMonthLabel(mo + "-01")}</option>`).join("")}
         </select>
       </div>
-      <div class="form-group" style="margin-top:8px;display:flex;gap:8px">
-        <button class="btn primary" id="btnShareReport" style="flex:1">📤 Chia sẻ</button>
-        <button class="btn" id="btnSaveReport" style="flex:1">💾 Lưu HTML</button>
+      <div class="form-group" style="margin-top:8px">
+        <button class="btn primary block" id="btnExcelReport">📊 Xuất Excel (.xlsx)</button>
       </div>`,
       {
         onMount: () => {
@@ -2386,15 +2386,10 @@ h1,h2,h3{margin:0 0 10px;}
             if (fromMo > toMo) { toast("Tháng bắt đầu phải ≤ tháng kết thúc"); return null; }
             return { memberId: memberId === "ALL" ? null : memberId, fromMo, toMo };
           };
-          document.getElementById("btnShareReport").onclick = async () => {
+          document.getElementById("btnExcelReport").onclick = () => {
             const p = getParams(); if (!p) return;
             closeModal();
-            await generateAndShareReport(p.memberId, p.fromMo, p.toMo);
-          };
-          document.getElementById("btnSaveReport").onclick = () => {
-            const p = getParams(); if (!p) return;
-            closeModal();
-            generateAndDownloadReport(p.memberId, p.fromMo, p.toMo);
+            generateExcelReport(p.memberId, p.fromMo, p.toMo);
           };
         },
       }
@@ -2541,6 +2536,150 @@ h1,h2,h3{margin:0 0 10px;}
       rangeLabel,
       targetMembers,
     };
+  }
+
+  function generateExcelReport(memberId, fromMo, toMo) {
+    if (typeof XLSX === "undefined") { toast("Đang tải thư viện, thử lại sau 2 giây"); return; }
+    const targetMembers = memberId
+      ? DB.state.members.filter((m) => m.id === memberId)
+      : DB.state.members;
+    if (!targetMembers.length) { toast("Không tìm thấy thành viên"); return; }
+
+    const start = fromMo + "-01";
+    const [toY, toM] = toMo.split("-").map(Number);
+    const end = new Date(toY, toM, 0).toISOString().slice(0, 10);
+    const rangeLabel = fromMo === toMo
+      ? fmtMonthLabel(fromMo + "-01")
+      : fmtMonthLabel(fromMo + "-01") + " – " + fmtMonthLabel(toMo + "-01");
+
+    const ledger = DB.memberLedger(start, end);
+    const txAll = DB.state.transactions.filter((t) => t.date >= start && t.date <= end && !t.linkedId);
+
+    // Bữa ăn theo thành viên
+    const mealCount = {}; // mid -> {breakfast, lunch, dinner, total}
+    targetMembers.forEach((m) => { mealCount[m.id] = { breakfast:0, lunch:0, dinner:0, total:0 }; });
+    Object.keys(DB.state.meals).forEach((key) => {
+      const idx = key.lastIndexOf("_");
+      const date = key.slice(0, idx).slice(0, 10);
+      const mid  = key.slice(idx + 1);
+      if (date < start || date > end || !mealCount[mid]) return;
+      const ms = DB.state.meals[key];
+      ["breakfast","lunch","dinner"].forEach((s) => {
+        if (ms[s]) { mealCount[mid][s]++; mealCount[mid].total++; }
+      });
+    });
+
+    const wb = XLSX.utils.book_new();
+
+    // ── Sheet 1: Tổng hợp ──
+    const summaryRows = [
+      [`BÁO CÁO SMARTFUND – ${rangeLabel}`],
+      [`Xuất lúc: ${new Date().toLocaleString("vi-VN")}`],
+      [],
+      ["Thành viên", "Đã góp (đ)", "Tiền ăn (đ)", "Chi khác (đ)", "Còn lại (đ)", "Số bữa ăn"],
+    ];
+    targetMembers.forEach((m) => {
+      const r = ledger.perMember[m.id] || { contributed:0, tienAn:0, chiKhac:0, remaining:0, meals:0 };
+      summaryRows.push([m.name, r.contributed, r.tienAn, r.chiKhac, r.remaining, mealCount[m.id]?.total || 0]);
+    });
+    // Dòng tổng
+    if (targetMembers.length > 1) {
+      summaryRows.push([]);
+      summaryRows.push([
+        "TỔNG",
+        targetMembers.reduce((s,m) => s + (ledger.perMember[m.id]?.contributed||0), 0),
+        targetMembers.reduce((s,m) => s + (ledger.perMember[m.id]?.tienAn||0), 0),
+        targetMembers.reduce((s,m) => s + (ledger.perMember[m.id]?.chiKhac||0), 0),
+        targetMembers.reduce((s,m) => s + (ledger.perMember[m.id]?.remaining||0), 0),
+        targetMembers.reduce((s,m) => s + (mealCount[m.id]?.total||0), 0),
+      ]);
+    }
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+    // Độ rộng cột
+    wsSummary["!cols"] = [{ wch:20 },{ wch:14 },{ wch:14 },{ wch:14 },{ wch:14 },{ wch:12 }];
+    XLSX.utils.book_append_sheet(wb, wsSummary, "Tổng hợp");
+
+    // ── Sheet 2: Giao dịch chi tiết ──
+    const txRows = [
+      ["Ngày", "Nội dung", "Loại", "Danh mục", "Thành viên", "Số tiền (đ)", "Ghi chú"],
+    ];
+    txAll
+      .sort((a,b) => a.datetime > b.datetime ? 1 : -1)
+      .forEach((t) => {
+        const member = DB.state.members.find((m) => m.id === t.memberId);
+        const catLabel = t.category === "AnUong" ? "Ăn uống" : (t.category || "Khác");
+        const typeLabel = t.type === "Thu" ? "Thu" : (t.subType === "quy" ? "Chi quỹ" : "Chi túi");
+        txRows.push([
+          t.date, t.description || catLabel, typeLabel, catLabel,
+          member?.name || "", t.type === "Thu" ? t.amount : -t.amount,
+          t.participants?.length ? `${t.participants.length} người tham gia` : "",
+        ]);
+      });
+    const wsTx = XLSX.utils.aoa_to_sheet(txRows);
+    wsTx["!cols"] = [{ wch:12 },{ wch:28 },{ wch:10 },{ wch:12 },{ wch:16 },{ wch:16 },{ wch:22 }];
+    XLSX.utils.book_append_sheet(wb, wsTx, "Giao dịch");
+
+    // ── Sheet 3: Bữa ăn ──
+    const mealRows = [
+      ["Thành viên", "Bữa sáng", "Bữa trưa", "Bữa tối", "Tổng bữa"],
+    ];
+    targetMembers.forEach((m) => {
+      const mc = mealCount[m.id] || { breakfast:0, lunch:0, dinner:0, total:0 };
+      mealRows.push([m.name, mc.breakfast, mc.lunch, mc.dinner, mc.total]);
+    });
+    const wsMeal = XLSX.utils.aoa_to_sheet(mealRows);
+    wsMeal["!cols"] = [{ wch:20 },{ wch:12 },{ wch:12 },{ wch:12 },{ wch:12 }];
+    XLSX.utils.book_append_sheet(wb, wsMeal, "Bữa ăn");
+
+    // ── Sheet 4: Chi tiết từng thành viên (mỗi người 1 block) ──
+    const detailRows = [];
+    targetMembers.forEach((m, idx) => {
+      if (idx > 0) detailRows.push([], []); // khoảng cách giữa các thành viên
+      detailRows.push([`▶ ${m.name.toUpperCase()}`]);
+      detailRows.push(["Ngày", "Nội dung", "Loại", "Số tiền (đ)"]);
+      const myTx = txAll.filter((t) => {
+        if (t.type === "Thu" && t.memberId === m.id) return true;
+        if (t.type === "Chi" && t.subType === "tui" && t.memberId === m.id) return true;
+        if (t.type === "Chi" && t.subType === "quy") {
+          const parts = t.participants?.length ? t.participants : DB.state.members.map((x) => x.id);
+          return parts.includes(m.id);
+        }
+        return false;
+      }).sort((a,b) => a.datetime > b.datetime ? 1 : -1);
+
+      myTx.forEach((t) => {
+        const isIncome = t.type === "Thu";
+        const catLabel = t.category === "AnUong" ? "Ăn uống" : (t.category || "Khác");
+        let amt;
+        if (isIncome) {
+          amt = t.amount;
+        } else if (t.subType === "quy") {
+          const parts = t.participants?.length ? t.participants : DB.state.members.map((x) => x.id);
+          const valid = parts.filter((id) => DB.state.members.find((x) => x.id === id));
+          amt = -(valid.length ? t.amount / valid.length : 0);
+        } else {
+          amt = -t.amount;
+        }
+        detailRows.push([
+          t.date,
+          t.description || catLabel,
+          isIncome ? "Thu" : (t.subType === "quy" ? "Chi quỹ" : "Chi túi"),
+          amt,
+        ]);
+      });
+      const r = ledger.perMember[m.id] || { contributed:0, tienAn:0, chiKhac:0, remaining:0 };
+      detailRows.push(["", "CÒN LẠI", "", r.remaining]);
+    });
+    const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
+    wsDetail["!cols"] = [{ wch:12 },{ wch:30 },{ wch:12 },{ wch:16 }];
+    XLSX.utils.book_append_sheet(wb, wsDetail, "Chi tiết thành viên");
+
+    // Xuất file
+    const fname = memberId
+      ? `SmartFund_${(targetMembers[0]?.name||"tv").replace(/\s+/g,"_")}_${fromMo}_${toMo}.xlsx`
+      : `SmartFund_TatCa_${fromMo}_${toMo}.xlsx`;
+    XLSX.writeFile(wb, fname);
+    toast("✅ Đã xuất file Excel");
   }
 
   async function generateAndShareReport(memberId, fromMo, toMo) {
