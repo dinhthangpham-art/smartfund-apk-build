@@ -1736,45 +1736,48 @@
           ${months.map((mo) => `<option value="${mo}"${mo === UI.reportMonth ? " selected" : ""}>${fmtMonthLabel(mo + "-01")}</option>`).join("")}
         </select>
       </div>
-      <div class="form-group" style="margin-top:4px">
-        <button class="btn primary block" id="btnGenReport">📥 Tạo & tải báo cáo (HTML)</button>
+      <div class="form-group" style="margin-top:8px;display:flex;gap:8px">
+        <button class="btn primary" id="btnShareReport" style="flex:1">📤 Chia sẻ</button>
+        <button class="btn" id="btnSaveReport" style="flex:1">💾 Lưu HTML</button>
       </div>`,
       {
         onMount: () => {
-          document.getElementById("btnGenReport").onclick = () => {
+          const getParams = () => {
             const memberId = document.getElementById("rptMember").value;
             const fromMo  = document.getElementById("rptFrom").value;
             const toMo    = document.getElementById("rptTo").value;
-            if (fromMo > toMo) { toast("Tháng bắt đầu phải ≤ tháng kết thúc"); return; }
-            generateAndDownloadReport(memberId === "ALL" ? null : memberId, fromMo, toMo);
+            if (fromMo > toMo) { toast("Tháng bắt đầu phải ≤ tháng kết thúc"); return null; }
+            return { memberId: memberId === "ALL" ? null : memberId, fromMo, toMo };
+          };
+          document.getElementById("btnShareReport").onclick = async () => {
+            const p = getParams(); if (!p) return;
             closeModal();
+            await generateAndShareReport(p.memberId, p.fromMo, p.toMo);
+          };
+          document.getElementById("btnSaveReport").onclick = () => {
+            const p = getParams(); if (!p) return;
+            closeModal();
+            generateAndDownloadReport(p.memberId, p.fromMo, p.toMo);
           };
         },
       }
     );
   }
 
-  function generateAndDownloadReport(memberId, fromMo, toMo) {
+  function buildReportHtml(memberId, fromMo, toMo) {
     // Xác định danh sách thành viên cần xuất
     const targetMembers = memberId
       ? DB.state.members.filter((m) => m.id === memberId)
       : DB.state.members;
-    if (!targetMembers.length) { toast("Không tìm thấy thành viên"); return; }
+    if (!targetMembers.length) return null;
 
     const start = fromMo + "-01";
-    // Ngày cuối của toMo
     const [toY, toM] = toMo.split("-").map(Number);
-    const end = new Date(toY, toM, 0).toISOString().slice(0, 10); // ngày cuối tháng
+    const end = new Date(toY, toM, 0).toISOString().slice(0, 10);
 
-    const { start: _s, end: _e } = { start, end };
-
-    // Tính ledger toàn bộ khoảng thời gian
     const ledger = DB.memberLedger(start, end);
-
-    // Lấy giao dịch trong khoảng
     const txAll = DB.state.transactions.filter((t) => t.date >= start && t.date <= end);
 
-    // Lấy bữa ăn trong khoảng
     const mealsByMember = {};
     targetMembers.forEach((m) => { mealsByMember[m.id] = []; });
     Object.keys(DB.state.meals).forEach((key) => {
@@ -1788,7 +1791,6 @@
       if (slots.length) mealsByMember[mid].push({ date, slots });
     });
 
-    // ---- Tạo nội dung HTML báo cáo ----
     const now = new Date().toLocaleString("vi-VN");
     const rangeLabel = fromMo === toMo
       ? fmtMonthLabel(fromMo + "-01")
@@ -1797,9 +1799,8 @@
     const memberBlocks = targetMembers.map((m) => {
       const row = ledger.perMember[m.id] || { contributed: 0, tienAn: 0, chiKhac: 0, remaining: 0, meals: 0 };
 
-      // Giao dịch liên quan thành viên: Thu của người đó + Chi quỹ có participants chứa người đó + Chi túi của người đó
       const myTx = txAll.filter((t) => {
-        if (t.linkedId) return false; // bỏ bản ghi tự động
+        if (t.linkedId) return false;
         if (t.type === "Thu" && t.memberId === m.id) return true;
         if (t.type === "Chi" && t.subType === "tui" && t.memberId === m.id) return true;
         if (t.type === "Chi" && t.subType === "quy") {
@@ -1853,13 +1854,11 @@
             <tr class="total-row"><td><strong>Còn lại</strong></td><td class="num">${posNeg}</td></tr>
             <tr><td>Số bữa ăn đã tham gia</td><td class="num">${row.meals} bữa</td></tr>
           </table>
-
           <h3 style="margin:16px 0 8px;color:#5b6b85;font-size:14px">GIAO DỊCH LIÊN QUAN</h3>
           ${myTx.length ? `<table class="detail-tbl">
             <thead><tr><th>Ngày</th><th>Nội dung</th><th>Loại</th><th style="text-align:right">Số tiền</th></tr></thead>
             <tbody>${txRows}</tbody>
           </table>` : `<p style="color:#888;font-size:13px">Không có giao dịch nào trong kỳ.</p>`}
-
           <h3 style="margin:16px 0 8px;color:#5b6b85;font-size:14px">BỮA ĂN THAM GIA</h3>
           ${mealRows ? `<table class="detail-tbl">
             <thead><tr><th>Ngày</th><th>Bữa</th></tr></thead>
@@ -1868,7 +1867,8 @@
         </div>`;
     }).join("<hr style='margin:28px 0;border:none;border-top:1px solid #dce3f0'>");
 
-    const html = `<!DOCTYPE html>
+    return {
+      html: `<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
@@ -1897,22 +1897,56 @@
   ${memberBlocks}
   <div style="margin-top:24px;font-size:11px;color:#aaa;text-align:center">SmartFund – Quỹ chung nhóm</div>
 </body>
-</html>`;
+</html>`,
+      fname: memberId
+        ? `BaoCao_${(targetMembers[0]?.name || "tv").replace(/\s+/g,"_")}_${fromMo}_${toMo}.html`
+        : `BaoCao_TatCa_${fromMo}_${toMo}.html`,
+      rangeLabel,
+      targetMembers,
+    };
+  }
 
-    // Tải file
+  async function generateAndShareReport(memberId, fromMo, toMo) {
+    const result = buildReportHtml(memberId, fromMo, toMo);
+    if (!result) { toast("Không tìm thấy thành viên"); return; }
+    const { html, fname, rangeLabel, targetMembers } = result;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const file = new File([blob], fname, { type: "text/html" });
+    // Thử Web Share API (Android Chrome, iOS Safari hỗ trợ)
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: "Báo cáo SmartFund",
+          text: `Báo cáo ${targetMembers.map((m) => m.name).join(", ")} – ${rangeLabel}`,
+        });
+        return;
+      } catch (e) {
+        if (e.name === "AbortError") return; // người dùng huỷ
+      }
+    }
+    // Fallback: tải file như cũ
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = fname;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast("✅ Đã lưu báo cáo");
+  }
+
+  function generateAndDownloadReport(memberId, fromMo, toMo) {
+    const result = buildReportHtml(memberId, fromMo, toMo);
+    if (!result) { toast("Không tìm thấy thành viên"); return; }
+    const { html, fname } = result;
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
-    a.href     = url;
-    const fname = memberId
-      ? `BaoCao_${(targetMembers[0]?.name || "tv").replace(/\s+/g,"_")}_${fromMo}_${toMo}.html`
-      : `BaoCao_TatCa_${fromMo}_${toMo}.html`;
-    a.download = fname;
-    document.body.appendChild(a);
-    a.click();
+    a.href = url; a.download = fname;
+    document.body.appendChild(a); a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    toast("✅ Đã tải báo cáo");
+    toast("✅ Đã lưu báo cáo HTML");
   }
 
   /* ================= SETTINGS / BACKUP ================= */
