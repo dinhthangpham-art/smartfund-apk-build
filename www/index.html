@@ -2528,11 +2528,16 @@ h1,h2,h3{margin:0 0 10px;}
         </tr>`;
       }).join("");
 
-      const mealRows = (mealsByMember[m.id] || [])
-        .sort((a, b) => a.date > b.date ? 1 : -1)
-        .map((r) => {
-          const slotNames = { breakfast: "Sáng", lunch: "Trưa", dinner: "Tối" };
-          return `<tr><td>${r.date}</td><td>${r.slots.map((s) => slotNames[s]).join(", ")}</td></tr>`;
+      const slotNames = { breakfast: "Sáng", lunch: "Trưa", dinner: "Tối" };
+      const sortedMeals = (mealsByMember[m.id] || []).sort((a, b) => a.date > b.date ? 1 : -1);
+      const totalSlots = sortedMeals.reduce((s, r) => s + r.slots.length, 0);
+      const mealRows = sortedMeals.map((r) => {
+          const wd = ["CN","T2","T3","T4","T5","T6","T7"][new Date(r.date + "T00:00:00").getDay()];
+          return `<tr>
+            <td style="white-space:nowrap">${r.date} (${wd})</td>
+            <td>${r.slots.map((s) => slotNames[s]).join(", ")}</td>
+            <td style="text-align:center">${r.slots.length} suất</td>
+          </tr>`;
         }).join("");
 
       const posNeg = row.remaining < 0
@@ -2554,10 +2559,11 @@ h1,h2,h3{margin:0 0 10px;}
             <thead><tr><th>Ngày</th><th>Nội dung</th><th>Loại</th><th style="text-align:right">Số tiền</th></tr></thead>
             <tbody>${txRows}</tbody>
           </table>` : `<p style="color:#888;font-size:13px">Không có giao dịch nào trong kỳ.</p>`}
-          <h3 style="margin:16px 0 8px;color:#5b6b85;font-size:14px">BỮA ĂN THAM GIA</h3>
+          <h3 style="margin:16px 0 8px;color:#5b6b85;font-size:14px">BỮA ĂN THAM GIA <span style="font-weight:400;color:#888">(${sortedMeals.length} ngày – ${totalSlots} suất)</span></h3>
           ${mealRows ? `<table class="detail-tbl">
-            <thead><tr><th>Ngày</th><th>Bữa</th></tr></thead>
+            <thead><tr><th>Ngày</th><th>Bữa</th><th style="text-align:center">Số suất</th></tr></thead>
             <tbody>${mealRows}</tbody>
+            <tfoot><tr style="font-weight:700;background:#eef2f9"><td colspan="2">Tổng</td><td style="text-align:center">${totalSlots} suất</td></tr></tfoot>
           </table>` : `<p style="color:#888;font-size:13px">Không có dữ liệu bữa ăn trong kỳ.</p>`}
         </div>`;
     }).join("<hr style='margin:28px 0;border:none;border-top:1px solid #dce3f0'>");
@@ -2900,32 +2906,21 @@ h1,h2,h3{margin:0 0 10px;}
   }
 
   function generatePdfReport(memberId, fromMo, toMo) {
-    const html = buildReportHtml(memberId, fromMo, toMo);
-    if (!html) { toast("Không có dữ liệu để xuất"); return; }
+    const result = buildReportHtml(memberId, fromMo, toMo);
+    if (!result) { toast("Không có dữ liệu để xuất"); return; }
 
-    // Mở cửa sổ mới rồi in => PDF
+    // buildReportHtml trả về full HTML page, chỉ cần thêm nút in
+    let fullHtml = result.html;
+    // Chèn nút In ngay sau <body>
+    fullHtml = fullHtml.replace("<body>", `<body>
+<div style="text-align:center;padding:12px 0;background:#034694;margin-bottom:12px">
+  <button onclick="window.print()" style="background:#fff;color:#034694;border:none;padding:10px 28px;font-size:15px;border-radius:6px;cursor:pointer;font-weight:700">🖨️ In / Lưu PDF</button>
+  <span style="color:#fff;font-size:12px;margin-left:16px;opacity:.8">Chọn "Lưu dưới dạng PDF" trong hộp thoại in</span>
+</div>`);
+
     const win = window.open("", "_blank");
-    if (!win) { toast("Trình duyệt chặn popup. Hãy cho phép popup rồi thử lại."); return; }
-    win.document.write(`<!DOCTYPE html>
-<html lang="vi"><head>
-<meta charset="utf-8">
-<title>Báo cáo Sổ Ăn Thắng</title>
-<style>
-  @media print { body { margin: 0; } button { display: none !important; } }
-  body { font-family: Arial, sans-serif; font-size: 13px; color: #111; padding: 16px; }
-  h1 { color: #034694; font-size: 20px; }
-  h2 { color: #034694; font-size: 15px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
-  table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
-  th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
-  th { background: #034694; color: #fff; }
-  tr:nth-child(even) { background: #f5f8ff; }
-  .meta { color: #555; font-size: 12px; margin-bottom: 12px; }
-  .btn-print { background:#034694;color:#fff;border:none;padding:10px 24px;font-size:14px;border-radius:6px;cursor:pointer;margin-bottom:16px; }
-</style>
-</head><body>
-<button class="btn-print" onclick="window.print()">🖨️ In / Lưu PDF</button>
-${html}
-</body></html>`);
+    if (!win) { toast("Trình duyệt chặn popup. Vào Cài đặt Chrome → Cho phép popup rồi thử lại."); return; }
+    win.document.write(fullHtml);
     win.document.close();
   }
 
