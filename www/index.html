@@ -2491,6 +2491,70 @@ h1,h2,h3{margin:0 0 10px;}
       ? fmtMonthLabel(fromMo + "-01")
       : fmtMonthLabel(fromMo + "-01") + " – " + fmtMonthLabel(toMo + "-01");
 
+    // ---- TỔNG QUAN NHÓM ----
+    const allMembers = DB.state.members;
+    const totalContributed = allMembers.reduce((s, m) => s + (ledger.perMember[m.id]?.contributed || 0), 0);
+    const totalTienAn     = allMembers.reduce((s, m) => s + (ledger.perMember[m.id]?.tienAn || 0), 0);
+    const totalChiKhac    = allMembers.reduce((s, m) => s + (ledger.perMember[m.id]?.chiKhac || 0), 0);
+    const totalRemaining  = allMembers.reduce((s, m) => s + (ledger.perMember[m.id]?.remaining || 0), 0);
+    const totalMeals      = allMembers.reduce((s, m) => s + (ledger.perMember[m.id]?.meals || 0), 0);
+    const txExpense = txAll.filter((t) => t.type === "Chi" && !t.linkedId);
+    const txIncome  = txAll.filter((t) => t.type === "Thu" && !t.linkedId);
+    const sumExpense = txExpense.reduce((s, t) => s + num(t.amount), 0);
+    const sumIncome  = txIncome.reduce((s, t) => s + num(t.amount), 0);
+
+    // Đếm số ngày có bữa ăn
+    const mealDays = new Set(Object.keys(DB.state.meals).map((k) => {
+      const idx2 = k.lastIndexOf("_"); return k.slice(0, idx2).slice(0, 10);
+    }).filter((d) => d >= start && d <= end));
+
+    // Bảng tổng hợp từng thành viên
+    const memberSummaryRows = allMembers.map((m) => {
+      const r = ledger.perMember[m.id] || { contributed:0, tienAn:0, chiKhac:0, remaining:0, meals:0 };
+      const color = r.remaining < 0 ? "color:#e8402a" : "color:#1a9e4e";
+      return `<tr>
+        <td style="font-weight:600">${esc(m.name)}</td>
+        <td style="text-align:right">${fmtVND(r.contributed)}</td>
+        <td style="text-align:right;color:#e8402a">${fmtVND(r.tienAn)}</td>
+        <td style="text-align:right;color:#e8402a">${fmtVND(r.chiKhac)}</td>
+        <td style="text-align:right;${color};font-weight:700">${fmtVNDSigned(r.remaining)}</td>
+        <td style="text-align:center">${r.meals} bữa</td>
+      </tr>`;
+    }).join("");
+
+    const groupBlock = `
+      <div class="member-block" style="border-left:4px solid #034694">
+        <h2 style="margin:0 0 14px;color:#034694;font-size:17px">📋 TỔNG QUAN NHÓM – ${esc(rangeLabel)}</h2>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:18px">
+          <div class="kpi-card"><div class="kpi-val">${allMembers.length}</div><div class="kpi-lbl">Thành viên</div></div>
+          <div class="kpi-card"><div class="kpi-val">${mealDays.size} ngày</div><div class="kpi-lbl">Có bữa ăn</div></div>
+          <div class="kpi-card"><div class="kpi-val">${totalMeals} bữa</div><div class="kpi-lbl">Tổng suất ăn</div></div>
+          <div class="kpi-card" style="border-color:#1a9e4e"><div class="kpi-val" style="color:#1a9e4e">${fmtVND(sumIncome)}</div><div class="kpi-lbl">Tổng thu quỹ</div></div>
+          <div class="kpi-card" style="border-color:#e8402a"><div class="kpi-val" style="color:#e8402a">${fmtVND(sumExpense)}</div><div class="kpi-lbl">Tổng chi</div></div>
+          <div class="kpi-card" style="border-color:${totalRemaining >= 0 ? '#1a9e4e' : '#e8402a'}"><div class="kpi-val" style="color:${totalRemaining >= 0 ? '#1a9e4e' : '#e8402a'}">${fmtVNDSigned(totalRemaining)}</div><div class="kpi-lbl">Quỹ còn lại</div></div>
+        </div>
+        <h3 style="margin:0 0 8px;color:#5b6b85;font-size:13px">BẢNG TỔNG HỢP TỪNG THÀNH VIÊN</h3>
+        <table class="detail-tbl">
+          <thead><tr>
+            <th>Thành viên</th>
+            <th style="text-align:right">Đã góp</th>
+            <th style="text-align:right">Tiền ăn</th>
+            <th style="text-align:right">Chi khác</th>
+            <th style="text-align:right">Còn lại</th>
+            <th style="text-align:center">Bữa ăn</th>
+          </tr></thead>
+          <tbody>${memberSummaryRows}</tbody>
+          <tfoot><tr style="font-weight:700;background:#eef2f9">
+            <td>Tổng</td>
+            <td style="text-align:right">${fmtVND(totalContributed)}</td>
+            <td style="text-align:right;color:#e8402a">${fmtVND(totalTienAn)}</td>
+            <td style="text-align:right;color:#e8402a">${fmtVND(totalChiKhac)}</td>
+            <td style="text-align:right">${fmtVNDSigned(totalRemaining)}</td>
+            <td style="text-align:center">${totalMeals} bữa</td>
+          </tr></tfoot>
+        </table>
+      </div>`;
+
     const memberBlocks = targetMembers.map((m) => {
       const row = ledger.perMember[m.id] || { contributed: 0, tienAn: 0, chiKhac: 0, remaining: 0, meals: 0 };
 
@@ -2588,13 +2652,20 @@ h1,h2,h3{margin:0 0 10px;}
   .detail-tbl th{background:#034694;color:#fff;padding:6px 8px;text-align:left;font-weight:600}
   .detail-tbl td{padding:5px 8px;border-bottom:1px solid #eef2f9}
   .detail-tbl tr:nth-child(even) td{background:#f9fbff}
+  .detail-tbl tfoot td{border-top:2px solid #034694}
   h3{text-transform:uppercase;letter-spacing:.04em}
-  @media print{body{background:#fff;padding:0} .member-block{box-shadow:none;border:1px solid #ddd;page-break-inside:avoid}}
+  .kpi-card{background:#f4f7fc;border:1.5px solid #d0daf0;border-radius:8px;padding:12px 14px;text-align:center}
+  .kpi-val{font-size:17px;font-weight:700;color:#034694;margin-bottom:4px}
+  .kpi-lbl{font-size:11px;color:#5b6b85;text-transform:uppercase;letter-spacing:.05em}
+  @media print{body{background:#fff;padding:0} .member-block{box-shadow:none;border:1px solid #ddd;page-break-inside:avoid} .kpi-card{border:1px solid #ccc}}
 </style>
 </head>
 <body>
-  <h1>📊 Báo cáo SmartFund</h1>
+  <h1>📊 Báo cáo Sổ Ăn Thắng</h1>
   <div class="meta">Kỳ: ${esc(rangeLabel)} &nbsp;|&nbsp; Xuất lúc: ${now}</div>
+  ${groupBlock}
+  <hr style="margin:20px 0;border:none;border-top:2px solid #dce3f0">
+  <h2 style="color:#034694;font-size:16px;margin:0 0 16px">CHI TIẾT TỪNG THÀNH VIÊN</h2>
   ${memberBlocks}
   <div style="margin-top:24px;font-size:11px;color:#aaa;text-align:center">SmartFund – Quỹ chung nhóm</div>
 </body>
